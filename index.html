@@ -126,6 +126,9 @@
             border-radius: 0.5rem;
             cursor: pointer;
             transition: all 0.2s ease;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
 
         .chat-item:hover {
@@ -429,7 +432,11 @@
             currentChatId = chatId;
             const chat = chats[chatId];
             messagesContainer.innerHTML = '';
-            chat.messages.forEach(msg => appendMessage(msg.role, msg.content));
+            chat.messages.forEach(msg => {
+                // Use 'ai' class for display but maintain 'assistant' role in data
+                const displayRole = msg.role === 'assistant' ? 'ai' : msg.role;
+                appendMessage(displayRole, msg.content);
+            });
             personaSelector.value = chat.persona;
             modelSelector.value = chat.model;
             updateChatList();
@@ -475,48 +482,81 @@
             messagesContainer.scrollTop = messagesContainer.scrollHeight;
         }
 
-        async function sendMessage() {
-            const userMessage = userInput.value.trim();
-            if (!userMessage) return;
+        // Message handling
+async function sendMessage() {
+    const userMessage = userInput.value.trim();
+    if (!userMessage) return;
 
-            appendMessage('user', userMessage);
-            userInput.value = '';
-            errorDiv.style.display = 'none';
+    appendMessage('user', userMessage);
+    userInput.value = '';
+    userInput.style.height = 'auto'; // Reset height
+    errorDiv.style.display = 'none';
 
-            const chat = chats[currentChatId];
-            chat.messages.push({ role: 'user', content: userMessage });
-            saveChats();
+    const chat = chats[currentChatId];
+    
+    // Update chat title if this is the first message
+    if (chat.messages.length === 0) {
+        chat.title = userMessage.slice(0, 30) + (userMessage.length > 30 ? '...' : '');
+        updateChatList();
+    }
 
-            try {
-                const response = await fetch('https://api.mistral.ai/v1/chat/completions', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${API_KEY}`
-                    },
-                    body: JSON.stringify({
-                        model: chat.model,
-                        messages: [
-                            { role: 'system', content: personas[chat.persona].prompt },
-                            ...chat.messages
-                        ]
-                    })
-                });
+    chat.messages.push({ role: 'user', content: userMessage });
+    saveChats();
 
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
+    try {
+        // Convert messages to the correct format for the API
+        const apiMessages = chat.messages.map(msg => ({
+            role: msg.role === 'ai' ? 'assistant' : msg.role,
+            content: msg.content
+        }));
 
-                const data = await response.json();
-                const aiMessage = data.choices[0].message.content;
-                appendMessage('ai', aiMessage);
-                chat.messages.push({ role: 'ai', content: aiMessage });
-                saveChats();
-            } catch (error) {
-                errorDiv.textContent = `Error: ${error.message}`;
-                errorDiv.style.display = 'block';
-            }
+        const response = await fetch('https://api.mistral.ai/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${API_KEY}`
+            },
+            body: JSON.stringify({
+                model: chat.model,
+                messages: [
+                    { role: 'system', content: personas[chat.persona].prompt },
+                    ...apiMessages
+                ]
+            })
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(`HTTP error! status: ${response.status}, message: ${JSON.stringify(errorData)}`);
         }
+
+        const data = await response.json();
+        const aiMessage = data.choices[0].message.content;
+        appendMessage('ai', aiMessage);
+        // Store the message with 'assistant' role in the chat history
+        chat.messages.push({ role: 'assistant', content: aiMessage });
+        saveChats();
+    } catch (error) {
+        errorDiv.textContent = `Error: ${error.message}`;
+        errorDiv.style.display = 'block';
+    }
+}
+
+// Update the loadChat function to handle role display correctly
+function loadChat(chatId) {
+    currentChatId = chatId;
+    const chat = chats[chatId];
+    messagesContainer.innerHTML = '';
+    chat.messages.forEach(msg => {
+        // Use 'ai' class for display when the role is 'assistant'
+        const displayRole = msg.role === 'assistant' ? 'ai' : msg.role;
+        appendMessage(displayRole, msg.content);
+    });
+    personaSelector.value = chat.persona;
+    modelSelector.value = chat.model;
+    updateChatList();
+}
+        
 
         // Event listeners
         sendButton.addEventListener('click', sendMessage);
